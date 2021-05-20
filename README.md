@@ -32,7 +32,7 @@ ACLiveKit is a opensource RTMP streaming SDK for iOS.
 
 #### Manually
 
-    1. Download all the files in the `LFLiveKit` subdirectory.
+    1. Download all the files in the `ACLiveKit` subdirectory.
     2. Add the source files to your Xcode project.
     3. Link with required frameworks:
         * UIKit
@@ -70,10 +70,5 @@ ACLiveKit is a opensource RTMP streaming SDK for iOS.
 
 ```
 
-
-## Release History
-    * 1.0
-        * CHANGE: init project
-
 ## License
- **LFLiveKit is released under the MIT license. See LICENSE for details.**
+ **ACLiveKit is released under the MIT license. See LICENSE for details.**
