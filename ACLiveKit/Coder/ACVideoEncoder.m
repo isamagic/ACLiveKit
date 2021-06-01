@@ -182,7 +182,7 @@ static void VideoCompressionOutputCallback(void *VTref,
             avcFrame.body = [[NSData alloc] initWithBytes:(dataPointer + bufferOffset + AVCCHeaderLength)
                                                    length:NALUnitLength];
             
-            // 压缩后的H264帧里面可能包含多个NAL unit数据吗？
+            // 压缩后的H264帧里面可能包含多个NALU
             bufferOffset += AVCCHeaderLength + NALUnitLength;
             
             if ([videoEncoder.delegate respondsToSelector:@selector(videoEncodeOutputAVCFrame:)]) {

@@ -42,12 +42,12 @@
     AudioStreamBasicDescription inputFormat = {0};
     inputFormat.mFormatID = kAudioFormatLinearPCM; // 音频格式：PCM
     inputFormat.mSampleRate = self.configuration.audioSampleRate; // 采样率
-    inputFormat.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
     inputFormat.mChannelsPerFrame = (UInt32)self.configuration.numberOfChannels; // 声道数
-    inputFormat.mFramesPerPacket = 1;
     inputFormat.mBitsPerChannel = (UInt32)self.configuration.audioSampleSize; // 采样大小
+    inputFormat.mFramesPerPacket = 1;
     inputFormat.mBytesPerFrame = inputFormat.mChannelsPerFrame * inputFormat.mBitsPerChannel/8;
     inputFormat.mBytesPerPacket = inputFormat.mBytesPerFrame * inputFormat.mFramesPerPacket;
+    inputFormat.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked;
     
     // 输出的音频格式
     AudioStreamBasicDescription outputFormat = {0};
@@ -118,7 +118,7 @@
     // 输入数据
     AudioBuffer inBuffer;
     inBuffer.mNumberChannels = 1;
-    inBuffer.mData = buf;
+    inBuffer.mData = buf; // 输入缓冲区
     inBuffer.mDataByteSize = (UInt32)self.configuration.bufferLength;
     
     AudioBufferList inBufferList;
@@ -130,8 +130,8 @@
     AudioBufferList outBufferList;
     outBufferList.mNumberBuffers = 1;
     outBufferList.mBuffers[0].mNumberChannels = inBuffer.mNumberChannels;
-    outBufferList.mBuffers[0].mDataByteSize = inBuffer.mDataByteSize;   // 设置缓冲区大小
-    outBufferList.mBuffers[0].mData = aacBuf;           // 设置AAC缓冲区
+    outBufferList.mBuffers[0].mDataByteSize = inBuffer.mDataByteSize;
+    outBufferList.mBuffers[0].mData = aacBuf; // 设置AAC缓冲区
     UInt32 outputDataPacketSize = 1;
     
     // 编码转换

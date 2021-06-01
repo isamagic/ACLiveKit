@@ -40,7 +40,7 @@
     header[1] = 0x00; // AACPacketType(0:AAC sequence header, 1:AAC raw)
     
     self.header = [NSData dataWithBytes:header length:length];
-    self.body = frame.header;
+    self.body = frame.header; // AudioSpecificConfig
     self.timestamp = 0;
     free(header);
 }
@@ -54,7 +54,7 @@
     header[1] = 0x01; // AACPacketType(0:AAC sequence header, 1:AAC raw)
     
     self.header = [NSData dataWithBytes:header length:length];
-    self.body = frame.body;
+    self.body = frame.body; // AAC raw
     self.timestamp = frame.timestamp;
     free(header);
 }

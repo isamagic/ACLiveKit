@@ -9,11 +9,11 @@
 #import "ACAudioFLVFrame.h"
 #import "ACVideoFLVFrame.h"
 #import "srs_librtmp.h"
-#import "ACPushStreamBuffer.h"
 
 @interface ACPushStreamService ()
 {
     srs_rtmp_t rtmp; // RTMP实例
+    dispatch_semaphore_t _lock;
 }
 
 // 连接状态
@@ -32,7 +32,7 @@
 @property (nonatomic, strong) dispatch_queue_t queue;
 
 // 发送缓冲区
-@property (nonatomic, strong) ACPushStreamBuffer *buffer;
+@property (nonatomic, strong) NSMutableArray *frameBuffer;
 
 @end
 
@@ -41,7 +41,8 @@
 - (instancetype)initWithUrl:(NSString *)url {
     if (self = [super init]) {
         _queue = dispatch_queue_create("ACPushStreamService", NULL);
-        _buffer = [[ACPushStreamBuffer alloc] init];
+        _frameBuffer = [NSMutableArray array];
+        _lock = dispatch_semaphore_create(1);
         _url = url;
     }
     return self;
@@ -103,7 +104,10 @@ rtmp_destroy:
     if (!frame) {
         return;
     }
-    [self.buffer appendObject:frame];
+    
+    dispatch_semaphore_wait(_lock, DISPATCH_TIME_FOREVER);
+    [self.frameBuffer addObject:frame];
+    dispatch_semaphore_signal(_lock);
     
     if(!self.isSending){
         [self sendFrame];
@@ -113,7 +117,7 @@ rtmp_destroy:
 - (void)sendFrame {
     __weak typeof(self) wself = self;
      dispatch_async(self.queue, ^{
-        if (!wself.isSending && wself.buffer.list.count > 0) {
+        if (!wself.isSending && wself.frameBuffer.count > 0) {
             wself.isSending = YES;
 
             if (!wself.connected){
@@ -128,7 +132,12 @@ rtmp_destroy:
             }
 
             // 发送音视频帧
-            ACAVFrame *frame = [wself.buffer popFirstObject];
+            dispatch_semaphore_wait(self->_lock, DISPATCH_TIME_FOREVER);
+            ACAVFrame *frame = [wself.frameBuffer firstObject];
+            if (wself.frameBuffer.count > 0) {
+                [wself.frameBuffer removeObjectAtIndex:0];
+            }
+            dispatch_semaphore_signal(self->_lock);
             if ([frame isKindOfClass:[ACVideoAVCFrame class]]) {
                 [wself sendVideoFrame:(ACVideoAVCFrame *)frame];
             } else {

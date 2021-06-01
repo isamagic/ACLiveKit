@@ -12,7 +12,6 @@
 		6EA5CD1126557C1C00DF8FFC /* ACVideoRecorder.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCE226557C1C00DF8FFC /* ACVideoRecorder.m */; };
 		6EA5CD1226557C1C00DF8FFC /* ACAudioRecorder.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCE326557C1C00DF8FFC /* ACAudioRecorder.m */; };
 		6EA5CD1326557C1C00DF8FFC /* ACPushStreamService.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCE626557C1C00DF8FFC /* ACPushStreamService.m */; };
-		6EA5CD1426557C1C00DF8FFC /* ACPushStreamBuffer.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCEA26557C1C00DF8FFC /* ACPushStreamBuffer.m */; };
 		6EA5CD1526557C1C00DF8FFC /* ACAudioDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCEE26557C1C00DF8FFC /* ACAudioDecoder.m */; };
 		6EA5CD1626557C1C00DF8FFC /* ACVideoDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCEF26557C1C00DF8FFC /* ACVideoDecoder.m */; };
 		6EA5CD1726557C1C00DF8FFC /* ACVideoFLVFrame.m in Sources */ = {isa = PBXBuildFile; fileRef = 6EA5CCF226557C1C00DF8FFC /* ACVideoFLVFrame.m */; };
@@ -70,9 +69,7 @@
 		6EA5CCE326557C1C00DF8FFC /* ACAudioRecorder.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ACAudioRecorder.m; sourceTree = "<group>"; };
 		6EA5CCE426557C1C00DF8FFC /* ACVideoRecorder.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ACVideoRecorder.h; sourceTree = "<group>"; };
 		6EA5CCE626557C1C00DF8FFC /* ACPushStreamService.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ACPushStreamService.m; sourceTree = "<group>"; };
-		6EA5CCE826557C1C00DF8FFC /* ACPushStreamBuffer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ACPushStreamBuffer.h; sourceTree = "<group>"; };
 		6EA5CCE926557C1C00DF8FFC /* ACPushStreamService.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ACPushStreamService.h; sourceTree = "<group>"; };
-		6EA5CCEA26557C1C00DF8FFC /* ACPushStreamBuffer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ACPushStreamBuffer.m; sourceTree = "<group>"; };
 		6EA5CCEB26557C1C00DF8FFC /* ACLiveSession.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ACLiveSession.h; sourceTree = "<group>"; };
 		6EA5CCED26557C1C00DF8FFC /* ACVideoDecoder.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ACVideoDecoder.h; sourceTree = "<group>"; };
 		6EA5CCEE26557C1C00DF8FFC /* ACAudioDecoder.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ACAudioDecoder.m; sourceTree = "<group>"; };
@@ -207,9 +204,9 @@
 			isa = PBXGroup;
 			children = (
 				6EA5CCE126557C1C00DF8FFC /* ACAudioRecorder.h */,
-				6EA5CCE226557C1C00DF8FFC /* ACVideoRecorder.m */,
 				6EA5CCE326557C1C00DF8FFC /* ACAudioRecorder.m */,
 				6EA5CCE426557C1C00DF8FFC /* ACVideoRecorder.h */,
+				6EA5CCE226557C1C00DF8FFC /* ACVideoRecorder.m */,
 			);
 			path = Record;
 			sourceTree = "<group>";
@@ -217,8 +214,6 @@
 		6EA5CCE526557C1C00DF8FFC /* PushStream */ = {
 			isa = PBXGroup;
 			children = (
-				6EA5CCE826557C1C00DF8FFC /* ACPushStreamBuffer.h */,
-				6EA5CCEA26557C1C00DF8FFC /* ACPushStreamBuffer.m */,
 				6EA5CCE926557C1C00DF8FFC /* ACPushStreamService.h */,
 				6EA5CCE626557C1C00DF8FFC /* ACPushStreamService.m */,
 			);
@@ -277,9 +272,9 @@
 			isa = PBXGroup;
 			children = (
 				6EA5CD0626557C1C00DF8FFC /* ACAudioEncoder.h */,
-				6EA5CD0726557C1C00DF8FFC /* ACVideoEncoder.m */,
 				6EA5CD0826557C1C00DF8FFC /* ACAudioEncoder.m */,
 				6EA5CD0926557C1C00DF8FFC /* ACVideoEncoder.h */,
+				6EA5CD0726557C1C00DF8FFC /* ACVideoEncoder.m */,
 			);
 			path = Coder;
 			sourceTree = "<group>";
@@ -472,7 +467,6 @@
 				6EA5CD1326557C1C00DF8FFC /* ACPushStreamService.m in Sources */,
 				6EA5CD2126557C1C00DF8FFC /* ACAudioEncoder.m in Sources */,
 				6EA5CD2326557C1C00DF8FFC /* srs_librtmp.cpp in Sources */,
-				6EA5CD1426557C1C00DF8FFC /* ACPushStreamBuffer.m in Sources */,
 				6EA5CD1926557C1C00DF8FFC /* ACAVFrame.m in Sources */,
 				6EB1F84025C3E608008EB42C /* PlayerViewController.m in Sources */,
 				6EB1F77E25C18210008EB42C /* MainViewController.m in Sources */,
