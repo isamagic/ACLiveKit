@@ -94,9 +94,9 @@
 }
 
 // 视频解码回调
-- (void)videoDecoderOutputData:(CVPixelBufferRef)pixelBuffer {
+- (void)videoDecoderOutputData:(ACVideoYuvFrame*)yuvFrame {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self.videoPlayer displayPixelBuffer:pixelBuffer];
+        [self.videoPlayer displayYuvFrame:yuvFrame];
     });
 }
 
@@ -164,9 +164,7 @@
 
 - (ACVideoPlayer *)videoPlayer {
     if (!_videoPlayer) {
-        _videoPlayer = [[ACVideoPlayer alloc] initWithFrame:self.playView.bounds];
-        _videoPlayer.backgroundColor = self.playView.backgroundColor.CGColor;
-        [self.playView.layer insertSublayer:_videoPlayer atIndex:0];
+        _videoPlayer = [[ACVideoPlayer alloc] initWithView:self.playView];
     }
     return _videoPlayer;
 }

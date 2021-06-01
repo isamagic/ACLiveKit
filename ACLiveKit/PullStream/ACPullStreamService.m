@@ -112,9 +112,6 @@ rtmp_destroy:
         if (status == 0) {
             // Audio Tag（音频流）
             if (type == SRS_RTMP_TYPE_AUDIO) {
-                // 解析：AAC Frame
-                // 解码：PCM Frame
-                // 播放：如何播放？Audio Queue Services
                 NSData *audioData = [NSData dataWithBytes:data length:size];
                 ACAudioFLVFrame *audioTag = [[ACAudioFLVFrame alloc] initWithData:audioData];
                 ACAudioAACFrame *aacFrame = [audioTag aacFrame];
@@ -126,9 +123,6 @@ rtmp_destroy:
             
             // Video Tag（视频流）
             else if (type == SRS_RTMP_TYPE_VIDEO) {
-                // 解析：AVC Frame
-                // 解码：YUV Frame
-                // 播放：如何播放？OpenGL
                 NSData *videoData = [NSData dataWithBytes:data length:size];
                 ACVideoFLVFrame *videoTag = [[ACVideoFLVFrame alloc] initWithData:videoData];
                 ACVideoAVCFrame *avcFrame = [videoTag avcFrame];
@@ -141,8 +135,6 @@ rtmp_destroy:
             
             // Script Tag（音视频元数据）
             else if (type == SRS_RTMP_TYPE_SCRIPT) {
-                // 如何使用？
-                // 如何实现音视频同步？
                 if (srs_rtmp_is_onMetaData(type, data, size)) {
                     [self unpackMetaData:data size:size];
                 }

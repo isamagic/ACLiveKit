@@ -147,9 +147,11 @@ static void didDecompress(void *decompressionOutputRefCon,
                           CMTime presentationDuration ) {
     CVPixelBufferRef *outputPixelBuffer = (CVPixelBufferRef *)sourceFrameRefCon;
     *outputPixelBuffer = CVPixelBufferRetain(pixelBuffer);
+    ACVideoYuvFrame *yuvFrame = [ACVideoYuvFrame new];
+    yuvFrame.pixelBuffer = pixelBuffer;
     ACVideoDecoder *decoder = (__bridge ACVideoDecoder *)decompressionOutputRefCon;
     if ([decoder.delegate respondsToSelector:@selector(videoDecoderOutputData:)]) {
-        [decoder.delegate videoDecoderOutputData:pixelBuffer];
+        [decoder.delegate videoDecoderOutputData:yuvFrame];
     }
 }
 

@@ -10,7 +10,7 @@
 #import <AudioToolbox/AudioToolbox.h>
 
 // 输出音频队列缓冲个数
-static const int kPlayBuffers = 1024;
+static const int kPlayBuffers = 3;
 
 @interface ACAudioPlayer ()
 {

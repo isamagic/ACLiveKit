@@ -79,9 +79,6 @@
         
     } else {
         // NALU
-//        NSInteger packetLen = bodyLength - 4; // 前4个字节是NALU的长度
-//        avcFrame.body = [NSData dataWithBytes:body+4 length:packetLen];
-        
         avcFrame.body = [NSData dataWithBytes:body length:bodyLength];
     }
     

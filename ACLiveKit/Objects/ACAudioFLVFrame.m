@@ -61,7 +61,7 @@
 
 - (void)unpackAudioData:(NSData *)data {
     NSInteger len = data.length;
-    if (len > 2) {
+    if (len > 2) { // AudioTagHeader占用2个字节
         self.header = [data subdataWithRange:NSMakeRange(0, 2)];
         self.body = [data subdataWithRange:NSMakeRange(2, len - 2)];
     }
@@ -79,7 +79,7 @@
     ACAudioAACFrame *frame = [[ACAudioAACFrame alloc] init];
     if (self.header.length > 1) {
         Byte *data = (Byte*)self.header.bytes;
-        Byte type = data[1];
+        Byte type = data[1]; // AACPacketType
         if (type == 1) { // AAC raw data
             frame.isRawData = YES;
         }

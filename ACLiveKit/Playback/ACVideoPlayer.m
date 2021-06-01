@@ -6,579 +6,267 @@
 //
 
 #import "ACVideoPlayer.h"
-#import <AVFoundation/AVUtilities.h>
-#import <mach/mach_time.h>
-#include <AVFoundation/AVFoundation.h>
-#import <UIKit/UIScreen.h>
-#include <OpenGLES/EAGL.h>
-#include <OpenGLES/ES2/gl.h>
-#include <OpenGLES/ES2/glext.h>
+#import "LYShaderTypes.h"
+#import <MetalKit/MetalKit.h>
+#import <GLKit/GLKit.h>
+#import "ACVideoYuvFrame.h"
 
-// Uniform index.
-enum
-{
-    UNIFORM_Y,
-    UNIFORM_UV,
-    UNIFORM_ROTATION_ANGLE,
-    UNIFORM_COLOR_CONVERSION_MATRIX,
-    NUM_UNIFORMS
-};
-GLint uniforms[NUM_UNIFORMS];
+@interface ACVideoPlayer () <MTKViewDelegate>
 
-// Attribute index.
-enum
-{
-    ATTRIB_VERTEX,
-    ATTRIB_TEXCOORD,
-    NUM_ATTRIBUTES
-};
+// view
+@property (nonatomic, strong) MTKView *mtkView;
 
-// Color Conversion Constants (YUV to RGB) including adjustment from 16-235/16-240 (video range)
+// reader
+@property (nonatomic) dispatch_semaphore_t lock;
+@property (nonatomic, strong) NSMutableArray *frameBuffer;
+@property (nonatomic, assign) CVMetalTextureCacheRef textureCache;
 
-// BT.601, which is the standard for SDTV.
-static const GLfloat kColorConversion601[] = {
-    1.164,  1.164, 1.164,
-    0.0, -0.392, 2.017,
-    1.596, -0.813,   0.0,
-};
-
-// BT.709, which is the standard for HDTV.
-static const GLfloat kColorConversion709[] = {
-    1.164,  1.164, 1.164,
-    0.0, -0.213, 2.112,
-    1.793, -0.533,   0.0,
-};
-
-
-
-@interface ACVideoPlayer ()
-{
-    // The pixel dimensions of the CAEAGLLayer.
-    GLint _backingWidth;
-    GLint _backingHeight;
-    
-    EAGLContext *_context;
-    CVOpenGLESTextureRef _lumaTexture;
-    CVOpenGLESTextureRef _chromaTexture;
-    
-    GLuint _frameBufferHandle;
-    GLuint _colorBufferHandle;
-    
-    const GLfloat *_preferredConversion;
-}
-
-@property GLuint program;
+// data
+@property (nonatomic, assign) vector_uint2 viewportSize;
+@property (nonatomic, strong) id<MTLRenderPipelineState> pipelineState;
+@property (nonatomic, strong) id<MTLCommandQueue> commandQueue;
+@property (nonatomic, strong) id<MTLTexture> texture;
+@property (nonatomic, strong) id<MTLBuffer> vertices;
+@property (nonatomic, strong) id<MTLBuffer> convertMatrix;
+@property (nonatomic, assign) NSUInteger numVertices;
 
 @end
 
 @implementation ACVideoPlayer
 
-- (instancetype)initWithFrame:(CGRect)frame {
-    self = [super init];
-    if (self) {
-        CGFloat scale = [[UIScreen mainScreen] scale];
-        self.contentsScale = scale;
-        
-        self.opaque = TRUE;
-        self.drawableProperties = @{ kEAGLDrawablePropertyRetainedBacking :[NSNumber numberWithBool:YES]};
-        
-        [self setFrame:frame];
-        
-        // Set the context into which the frames will be drawn.
-        _context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
-        
-        if (!_context) {
-            return nil;
-        }
-        
-        // Set the default conversion to BT.709, which is the standard for HDTV.
-        _preferredConversion = kColorConversion709;
-        
-        [self setupGL];
+/// 初始化
+/// @param playView 播放容器
+- (instancetype)initWithView:(UIView *)playView {
+    if (self = [super init]) {
+        _frameBuffer = [NSMutableArray array];
+        _lock = dispatch_semaphore_create(1);
+        [self setupPlayView:playView];
+        [self setupPipeline];
+        [self setupVertex];
+        [self setupMatrix];
     }
-    
     return self;
 }
 
-/// 显示图像
-/// @param pixelBuffer 图像数据
-- (void)displayPixelBuffer:(CVPixelBufferRef)pixelBuffer {
-    if (!pixelBuffer) {
-        return;
-    }
+// 初始化播放页
+- (void)setupPlayView:(UIView *)playView {
+    self.mtkView = [[MTKView alloc] initWithFrame:playView.bounds];
+    self.mtkView.device = MTLCreateSystemDefaultDevice(); // 获取默认的device
+    self.mtkView.delegate = self;
+    [playView insertSubview:self.mtkView atIndex:0];
     
-    int frameWidth = (int)CVPixelBufferGetWidth(pixelBuffer);
-    int frameHeight = (int)CVPixelBufferGetHeight(pixelBuffer);
-    [self displayPixelBuffer:pixelBuffer width:frameWidth height:frameHeight];
-    CVPixelBufferRelease(pixelBuffer);
+    self.viewportSize = (vector_uint2){self.mtkView.drawableSize.width, self.mtkView.drawableSize.height};
+    
+    // 创建纹理缓存：TextureCache
+    CVMetalTextureCacheCreate(NULL, NULL, self.mtkView.device, NULL, &_textureCache);
 }
 
-- (void)displayPixelBuffer:(CVPixelBufferRef)pixelBuffer
-                     width:(uint32_t)frameWidth
-                    height:(uint32_t)frameHeight
-{
-    if (!_context || ![EAGLContext setCurrentContext:_context]) {
-        return;
-    }
-    
-    if(pixelBuffer == NULL) {
-        NSLog(@"Pixel buffer is null");
-        return;
-    }
-    
-    CVReturn err;
-    
-    size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
-    
-    /*
-     Use the color attachment of the pixel buffer to determine the appropriate color conversion matrix.
-     */
-    CFTypeRef colorAttachments = CVBufferGetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, NULL);
-    
-    if (CFStringCompare(colorAttachments, kCVImageBufferYCbCrMatrix_ITU_R_601_4, 0) == kCFCompareEqualTo) {
-        _preferredConversion = kColorConversion601;
-    }
-    else {
-        _preferredConversion = kColorConversion709;
-    }
-    
-    /*
-     CVOpenGLESTextureCacheCreateTextureFromImage will create GLES texture optimally from CVPixelBufferRef.
-     */
-    
-    /*
-     Create Y and UV textures from the pixel buffer. These textures will be drawn on the frame buffer Y-plane.
-     */
-    
-    CVOpenGLESTextureCacheRef _videoTextureCache;
-    
-    // Create CVOpenGLESTextureCacheRef for optimal CVPixelBufferRef to GLES texture conversion.
-    err = CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, _context, NULL, &_videoTextureCache);
-    if (err != noErr) {
-        NSLog(@"Error at CVOpenGLESTextureCacheCreate %d", err);
-        return;
-    }
-    
-    glActiveTexture(GL_TEXTURE0);
-    
-    err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
-                                                       _videoTextureCache,
-                                                       pixelBuffer,
-                                                       NULL,
-                                                       GL_TEXTURE_2D,
-                                                       GL_RED_EXT,
-                                                       frameWidth,
-                                                       frameHeight,
-                                                       GL_RED_EXT,
-                                                       GL_UNSIGNED_BYTE,
-                                                       0,
-                                                       &_lumaTexture);
-    if (err) {
-        NSLog(@"Error at CVOpenGLESTextureCacheCreateTextureFromImage %d", err);
-    }
-    
-    glBindTexture(CVOpenGLESTextureGetTarget(_lumaTexture), CVOpenGLESTextureGetName(_lumaTexture));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    
-    if(planeCount == 2) {
-        // UV-plane.
-        glActiveTexture(GL_TEXTURE1);
-        err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
-                                                           _videoTextureCache,
-                                                           pixelBuffer,
-                                                           NULL,
-                                                           GL_TEXTURE_2D,
-                                                           GL_RG_EXT,
-                                                           frameWidth / 2,
-                                                           frameHeight / 2,
-                                                           GL_RG_EXT,
-                                                           GL_UNSIGNED_BYTE,
-                                                           1,
-                                                           &_chromaTexture);
-        if (err) {
-            NSLog(@"Error at CVOpenGLESTextureCacheCreateTextureFromImage %d", err);
-        }
-        
-        glBindTexture(CVOpenGLESTextureGetTarget(_chromaTexture), CVOpenGLESTextureGetName(_chromaTexture));
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
-    
-    glBindFramebuffer(GL_FRAMEBUFFER, _frameBufferHandle);
-    
-    // Set the view port to the entire view.
-    glViewport(0, 0, _backingWidth, _backingHeight);
-    
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    
-    // Use shader program.
-    glUseProgram(self.program);
-    //    glUniform1f(uniforms[UNIFORM_LUMA_THRESHOLD], 1);
-    //    glUniform1f(uniforms[UNIFORM_CHROMA_THRESHOLD], 1);
-    glUniform1f(uniforms[UNIFORM_ROTATION_ANGLE], 0);
-    glUniformMatrix3fv(uniforms[UNIFORM_COLOR_CONVERSION_MATRIX], 1, GL_FALSE, _preferredConversion);
-    
-    // Set up the quad vertices with respect to the orientation and aspect ratio of the video.
-    CGRect viewBounds = self.bounds;
-    CGSize contentSize = CGSizeMake(frameWidth, frameHeight);
-    CGRect vertexSamplingRect = AVMakeRectWithAspectRatioInsideRect(contentSize, viewBounds);
-    
-    // Compute normalized quad coordinates to draw the frame into.
-    CGSize normalizedSamplingSize = CGSizeMake(0.0, 0.0);
-    CGSize cropScaleAmount = CGSizeMake(vertexSamplingRect.size.width/viewBounds.size.width,
-                                        vertexSamplingRect.size.height/viewBounds.size.height);
-    
-    // Normalize the quad vertices.
-    if (cropScaleAmount.width > cropScaleAmount.height) {
-        normalizedSamplingSize.width = 1.0;
-        normalizedSamplingSize.height = cropScaleAmount.height/cropScaleAmount.width;
-    }
-    else {
-        normalizedSamplingSize.width = cropScaleAmount.width/cropScaleAmount.height;
-        normalizedSamplingSize.height = 1.0;;
-    }
-    
-    /*
-     The quad vertex data defines the region of 2D plane onto which we draw our pixel buffers.
-     Vertex data formed using (-1,-1) and (1,1) as the bottom left and top right coordinates respectively, covers the entire screen.
-     */
-    GLfloat quadVertexData [] = {
-        -1 * normalizedSamplingSize.width, -1 * normalizedSamplingSize.height,
-        normalizedSamplingSize.width, -1 * normalizedSamplingSize.height,
-        -1 * normalizedSamplingSize.width, normalizedSamplingSize.height,
-        normalizedSamplingSize.width, normalizedSamplingSize.height,
+/**
+ 
+ // BT.601, which is the standard for SDTV.
+ matrix_float3x3 kColorConversion601Default = (matrix_float3x3){
+ (simd_float3){1.164,  1.164, 1.164},
+ (simd_float3){0.0, -0.392, 2.017},
+ (simd_float3){1.596, -0.813,   0.0},
+ };
+ 
+ //// BT.601 full range (ref: http://www.equasys.de/colorconversion.html)
+ matrix_float3x3 kColorConversion601FullRangeDefault = (matrix_float3x3){
+ (simd_float3){1.0,    1.0,    1.0},
+ (simd_float3){0.0,    -0.343, 1.765},
+ (simd_float3){1.4,    -0.711, 0.0},
+ };
+ 
+ //// BT.709, which is the standard for HDTV.
+ matrix_float3x3 kColorConversion709Default[] = {
+ (simd_float3){1.164,  1.164, 1.164},
+ (simd_float3){0.0, -0.213, 2.112},
+ (simd_float3){1.793, -0.533,   0.0},
+ };
+ */
+- (void)setupMatrix {
+    // 设置好转换的矩阵
+    matrix_float3x3 kColorConversion601FullRangeMatrix = (matrix_float3x3){
+        (simd_float3){1.0,    1.0,    1.0},
+        (simd_float3){0.0,    -0.343, 1.765},
+        (simd_float3){1.4,    -0.711, 0.0},
     };
     
-    // Update attribute values.
-    glVertexAttribPointer(ATTRIB_VERTEX, 2, GL_FLOAT, 0, 0, quadVertexData);
-    glEnableVertexAttribArray(ATTRIB_VERTEX);
+    // 设置偏移
+    vector_float3 kColorConversion601FullRangeOffset = (vector_float3){ -(16.0/255.0), -0.5, -0.5};
     
-    /*
-     The texture vertices are set up such that we flip the texture vertically. This is so that our top left origin buffers match OpenGL's bottom left texture coordinate system.
-     */
-    CGRect textureSamplingRect = CGRectMake(0, 0, 1, 1);
-    GLfloat quadTextureData[] =  {
-        CGRectGetMinX(textureSamplingRect), CGRectGetMaxY(textureSamplingRect),
-        CGRectGetMaxX(textureSamplingRect), CGRectGetMaxY(textureSamplingRect),
-        CGRectGetMinX(textureSamplingRect), CGRectGetMinY(textureSamplingRect),
-        CGRectGetMaxX(textureSamplingRect), CGRectGetMinY(textureSamplingRect)
+    // 设置参数
+    LYConvertMatrix matrix;
+    matrix.matrix = kColorConversion601FullRangeMatrix;
+    matrix.offset = kColorConversion601FullRangeOffset;
+    
+    self.convertMatrix = [self.mtkView.device newBufferWithBytes:&matrix
+                                                          length:sizeof(LYConvertMatrix)
+                                                         options:MTLResourceStorageModeShared];
+}
+
+// 设置渲染管道
+-(void)setupPipeline {
+    // shaders.metal
+    id<MTLLibrary> defaultLibrary = [self.mtkView.device newDefaultLibrary];
+    
+    // 顶点shader：vertexShader是函数名
+    id<MTLFunction> vertexFunction = [defaultLibrary newFunctionWithName:@"vertexShader"];
+    
+    // 片元shader：samplingShader是函数名
+    id<MTLFunction> fragmentFunction = [defaultLibrary newFunctionWithName:@"samplingShader"];
+    
+    MTLRenderPipelineDescriptor *pipelineStateDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+    pipelineStateDescriptor.vertexFunction = vertexFunction;
+    pipelineStateDescriptor.fragmentFunction = fragmentFunction;
+    pipelineStateDescriptor.colorAttachments[0].pixelFormat = self.mtkView.colorPixelFormat; // 设置颜色格式
+    
+    // 创建图形渲染管道，耗性能操作不宜频繁调用
+    self.pipelineState = [self.mtkView.device newRenderPipelineStateWithDescriptor:pipelineStateDescriptor
+                                                                             error:NULL];
+    
+    // CommandQueue是渲染指令队列，保证渲染指令有序地提交到GPU
+    self.commandQueue = [self.mtkView.device newCommandQueue];
+}
+
+// 设置顶点
+- (void)setupVertex {
+    static const LYVertex quadVertices[] =
+    {   // 顶点坐标，分别是x、y、z、w；    纹理坐标，x、y；
+        { {  1.0, -1.0, 0.0, 1.0 },  { 1.f, 1.f } },
+        { { -1.0, -1.0, 0.0, 1.0 },  { 0.f, 1.f } },
+        { { -1.0,  1.0, 0.0, 1.0 },  { 0.f, 0.f } },
+        
+        { {  1.0, -1.0, 0.0, 1.0 },  { 1.f, 1.f } },
+        { { -1.0,  1.0, 0.0, 1.0 },  { 0.f, 0.f } },
+        { {  1.0,  1.0, 0.0, 1.0 },  { 1.f, 0.f } },
     };
     
-    glVertexAttribPointer(ATTRIB_TEXCOORD, 2, GL_FLOAT, 0, 0, quadTextureData);
-    glEnableVertexAttribArray(ATTRIB_TEXCOORD);
-    
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    
-    glBindRenderbuffer(GL_RENDERBUFFER, _colorBufferHandle);
-    [_context presentRenderbuffer:GL_RENDERBUFFER];
-    
-    [self cleanUpTextures];
-    // Periodic texture cache flush every frame
-    CVOpenGLESTextureCacheFlush(_videoTextureCache, 0);
-    
-    if(_videoTextureCache) {
-        CFRelease(_videoTextureCache);
-    }
+    // 创建顶点缓存
+    self.vertices = [self.mtkView.device newBufferWithBytes:quadVertices
+                                                     length:sizeof(quadVertices)
+                                                    options:MTLResourceStorageModeShared];
+    self.numVertices = sizeof(quadVertices) / sizeof(LYVertex); // 顶点个数
 }
 
-# pragma mark - OpenGL setup
+// 设置纹理
+- (void)setupTextureWithEncoder:(id<MTLRenderCommandEncoder>)encoder buffer:(CVPixelBufferRef)pixelBuffer {
+    id<MTLTexture> textureY = nil;
+    id<MTLTexture> textureUV = nil;
+    
+    // textureY 设置
+    {
+        size_t width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0);
+        size_t height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0);
+        MTLPixelFormat pixelFormat = MTLPixelFormatR8Unorm; // 这里的颜色格式不是RGBA
 
-- (void)setupGL
-{
-    if (!_context || ![EAGLContext setCurrentContext:_context]) {
-        return;
+        CVMetalTextureRef texture = NULL; // CoreVideo的Metal纹理
+        CVReturn status = CVMetalTextureCacheCreateTextureFromImage(NULL, self.textureCache, pixelBuffer, NULL, pixelFormat, width, height, 0, &texture);
+        if(status == kCVReturnSuccess)
+        {
+            textureY = CVMetalTextureGetTexture(texture); // 转成Metal用的纹理
+            CFRelease(texture);
+        }
     }
     
-    [self setupBuffers];
-    [self loadShaders];
-    
-    glUseProgram(self.program);
-    
-    // 0 and 1 are the texture IDs of _lumaTexture and _chromaTexture respectively.
-    glUniform1i(uniforms[UNIFORM_Y], 0);
-    glUniform1i(uniforms[UNIFORM_UV], 1);
-    glUniform1f(uniforms[UNIFORM_ROTATION_ANGLE], 0);
-    glUniformMatrix3fv(uniforms[UNIFORM_COLOR_CONVERSION_MATRIX], 1, GL_FALSE, _preferredConversion);
-}
-
-#pragma mark - Utilities
-
-- (void)setupBuffers
-{
-    glDisable(GL_DEPTH_TEST);
-    
-    glEnableVertexAttribArray(ATTRIB_VERTEX);
-    glVertexAttribPointer(ATTRIB_VERTEX, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), 0);
-    
-    glEnableVertexAttribArray(ATTRIB_TEXCOORD);
-    glVertexAttribPointer(ATTRIB_TEXCOORD, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), 0);
-    
-    [self createBuffers];
-}
-
-- (void) createBuffers
-{
-    glGenFramebuffers(1, &_frameBufferHandle);
-    glBindFramebuffer(GL_FRAMEBUFFER, _frameBufferHandle);
-    
-    glGenRenderbuffers(1, &_colorBufferHandle);
-    glBindRenderbuffer(GL_RENDERBUFFER, _colorBufferHandle);
-    
-    [_context renderbufferStorage:GL_RENDERBUFFER fromDrawable:self];
-    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &_backingWidth);
-    glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &_backingHeight);
-    
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, _colorBufferHandle);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        NSLog(@"Failed to make complete framebuffer object %x", glCheckFramebufferStatus(GL_FRAMEBUFFER));
-    }
-}
-
-- (void) releaseBuffers
-{
-    if(_frameBufferHandle) {
-        glDeleteFramebuffers(1, &_frameBufferHandle);
-        _frameBufferHandle = 0;
-    }
-    
-    if(_colorBufferHandle) {
-        glDeleteRenderbuffers(1, &_colorBufferHandle);
-        _colorBufferHandle = 0;
-    }
-}
-
-- (void) resetRenderBuffer
-{
-    if (!_context || ![EAGLContext setCurrentContext:_context]) {
-        return;
-    }
-    
-    [self releaseBuffers];
-    [self createBuffers];
-}
-
-- (void) cleanUpTextures
-{
-    if (_lumaTexture) {
-        CFRelease(_lumaTexture);
-        _lumaTexture = NULL;
-    }
-    
-    if (_chromaTexture) {
-        CFRelease(_chromaTexture);
-        _chromaTexture = NULL;
-    }
-}
-
-#pragma mark -  OpenGL ES 2 shader compilation
-
-const GLchar *shader_fsh = (const GLchar*)"varying highp vec2 texCoordVarying;"
-"precision mediump float;"
-"uniform sampler2D SamplerY;"
-"uniform sampler2D SamplerUV;"
-"uniform mat3 colorConversionMatrix;"
-"void main()"
-"{"
-"    mediump vec3 yuv;"
-"    lowp vec3 rgb;"
-//   Subtract constants to map the video range start at 0
-"    yuv.x = (texture2D(SamplerY, texCoordVarying).r - (16.0/255.0));"
-"    yuv.yz = (texture2D(SamplerUV, texCoordVarying).rg - vec2(0.5, 0.5));"
-"    rgb = colorConversionMatrix * yuv;"
-"    gl_FragColor = vec4(rgb, 1);"
-"}";
-
-const GLchar *shader_vsh = (const GLchar*)"attribute vec4 position;"
-"attribute vec2 texCoord;"
-"uniform float preferredRotation;"
-"varying vec2 texCoordVarying;"
-"void main()"
-"{"
-"    mat4 rotationMatrix = mat4(cos(preferredRotation), -sin(preferredRotation), 0.0, 0.0,"
-"                               sin(preferredRotation),  cos(preferredRotation), 0.0, 0.0,"
-"                               0.0,                        0.0, 1.0, 0.0,"
-"                               0.0,                        0.0, 0.0, 1.0);"
-"    gl_Position = position * rotationMatrix;"
-"    texCoordVarying = texCoord;"
-"}";
-
-- (BOOL)loadShaders
-{
-    GLuint vertShader = 0, fragShader = 0;
-    
-    // Create the shader program.
-    self.program = glCreateProgram();
-    
-    if(![self compileShaderString:&vertShader type:GL_VERTEX_SHADER shaderString:shader_vsh]) {
-        NSLog(@"Failed to compile vertex shader");
-        return NO;
-    }
-    
-    if(![self compileShaderString:&fragShader type:GL_FRAGMENT_SHADER shaderString:shader_fsh]) {
-        NSLog(@"Failed to compile fragment shader");
-        return NO;
-    }
-    
-    // Attach vertex shader to program.
-    glAttachShader(self.program, vertShader);
-    
-    // Attach fragment shader to program.
-    glAttachShader(self.program, fragShader);
-    
-    // Bind attribute locations. This needs to be done prior to linking.
-    glBindAttribLocation(self.program, ATTRIB_VERTEX, "position");
-    glBindAttribLocation(self.program, ATTRIB_TEXCOORD, "texCoord");
-    
-    // Link the program.
-    if (![self linkProgram:self.program]) {
-        NSLog(@"Failed to link program: %d", self.program);
+    // textureUV 设置
+    {
+        size_t width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 1);
+        size_t height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 1);
+        MTLPixelFormat pixelFormat = MTLPixelFormatRG8Unorm; // 2-8bit的格式
         
-        if (vertShader) {
-            glDeleteShader(vertShader);
-            vertShader = 0;
+        CVMetalTextureRef texture = NULL; // CoreVideo的Metal纹理
+        CVReturn status = CVMetalTextureCacheCreateTextureFromImage(NULL, self.textureCache, pixelBuffer, NULL, pixelFormat, width, height, 1, &texture);
+        if(status == kCVReturnSuccess)
+        {
+            textureUV = CVMetalTextureGetTexture(texture); // 转成Metal用的纹理
+            CFRelease(texture);
         }
-        if (fragShader) {
-            glDeleteShader(fragShader);
-            fragShader = 0;
-        }
-        if (self.program) {
-            glDeleteProgram(self.program);
-            self.program = 0;
-        }
+    }
+    
+    if(textureY != nil && textureUV != nil)
+    {
+        [encoder setFragmentTexture:textureY
+                            atIndex:LYFragmentTextureIndexTextureY]; // 设置纹理
+        [encoder setFragmentTexture:textureUV
+                            atIndex:LYFragmentTextureIndexTextureUV]; // 设置纹理
+    }
+    CFRelease(pixelBuffer); // 记得释放
+}
+
+
+#pragma mark - MTKViewDelegate
+
+- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
+    self.viewportSize = (vector_uint2){size.width, size.height};
+}
+
+- (void)drawInMTKView:(MTKView *)view {
+    // 每次渲染都要单独创建一个CommandBuffer
+    id<MTLCommandBuffer> commandBuffer = [self.commandQueue commandBuffer];
+    MTLRenderPassDescriptor *renderPassDescriptor = view.currentRenderPassDescriptor;
+    // MTLRenderPassDescriptor描述一系列attachments的值，类似GL的FrameBuffer；同时也用来创建MTLRenderCommandEncoder
+    CVPixelBufferRef pixelBuffer = [self readPixelBuffer]; // 从缓存中读取图像数据
+    if(renderPassDescriptor && pixelBuffer)
+    {
+        // 设置默认颜色
+        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.5, 0.5, 1.0f);
         
-        return NO;
+        // 编码绘制指令的Encoder
+        id<MTLRenderCommandEncoder> renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
+        
+        // 设置显示区域
+        [renderEncoder setViewport:(MTLViewport){0.0, 0.0, self.viewportSize.x, self.viewportSize.y, -1.0, 1.0 }];
+        
+        // 设置渲染管道，以保证顶点和片元两个shader会被调用
+        [renderEncoder setRenderPipelineState:self.pipelineState];
+        
+        // 设置顶点缓存
+        [renderEncoder setVertexBuffer:self.vertices
+                                offset:0
+                               atIndex:LYVertexInputIndexVertices];
+        
+        [self setupTextureWithEncoder:renderEncoder buffer:pixelBuffer];
+        [renderEncoder setFragmentBuffer:self.convertMatrix
+                                  offset:0
+                                 atIndex:LYFragmentInputIndexMatrix];
+        
+        // 绘制
+        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangle
+                          vertexStart:0
+                          vertexCount:self.numVertices];
+        
+        // 结束
+        [renderEncoder endEncoding];
+        
+        // 显示
+        [commandBuffer presentDrawable:view.currentDrawable];
     }
     
-    // Get uniform locations.
-    uniforms[UNIFORM_Y] = glGetUniformLocation(self.program, "SamplerY");
-    uniforms[UNIFORM_UV] = glGetUniformLocation(self.program, "SamplerUV");
-    //    uniforms[UNIFORM_LUMA_THRESHOLD] = glGetUniformLocation(self.program, "lumaThreshold");
-    //    uniforms[UNIFORM_CHROMA_THRESHOLD] = glGetUniformLocation(self.program, "chromaThreshold");
-    uniforms[UNIFORM_ROTATION_ANGLE] = glGetUniformLocation(self.program, "preferredRotation");
-    uniforms[UNIFORM_COLOR_CONVERSION_MATRIX] = glGetUniformLocation(self.program, "colorConversionMatrix");
-    
-    // Release vertex and fragment shaders.
-    if (vertShader) {
-        glDetachShader(self.program, vertShader);
-        glDeleteShader(vertShader);
-    }
-    if (fragShader) {
-        glDetachShader(self.program, fragShader);
-        glDeleteShader(fragShader);
-    }
-    
-    return YES;
+    [commandBuffer commit]; // 提交
 }
 
-- (BOOL)compileShaderString:(GLuint *)shader type:(GLenum)type shaderString:(const GLchar*)shaderString
-{
-    *shader = glCreateShader(type);
-    glShaderSource(*shader, 1, &shaderString, NULL);
-    glCompileShader(*shader);
-    
-#if defined(DEBUG)
-    GLint logLength;
-    glGetShaderiv(*shader, GL_INFO_LOG_LENGTH, &logLength);
-    if (logLength > 0) {
-        GLchar *log = (GLchar *)malloc(logLength);
-        glGetShaderInfoLog(*shader, logLength, &logLength, log);
-        NSLog(@"Shader compile log:\n%s", log);
-        free(log);
-    }
-#endif
-    
-    GLint status = 0;
-    glGetShaderiv(*shader, GL_COMPILE_STATUS, &status);
-    if (status == 0) {
-        glDeleteShader(*shader);
-        return NO;
-    }
-    
-    return YES;
+#pragma mark - Display
+
+/// 渲染YUV图像
+/// @param yuvFrame YUV数据
+- (void)displayYuvFrame:(ACVideoYuvFrame*)yuvFrame {
+    dispatch_semaphore_wait(_lock, DISPATCH_TIME_FOREVER);
+    [self.frameBuffer addObject:yuvFrame];
+    dispatch_semaphore_signal(_lock);
 }
 
-- (BOOL)compileShader:(GLuint *)shader type:(GLenum)type URL:(NSURL *)URL
-{
-    NSError *error;
-    NSString *sourceString = [[NSString alloc] initWithContentsOfURL:URL encoding:NSUTF8StringEncoding error:&error];
-    if (sourceString == nil) {
-        NSLog(@"Failed to load vertex shader: %@", [error localizedDescription]);
-        return NO;
+// 读取YUV数据
+- (CVPixelBufferRef)readPixelBuffer {
+    CVPixelBufferRef pixelBuffer = NULL;
+    dispatch_semaphore_wait(_lock, DISPATCH_TIME_FOREVER);
+    ACVideoYuvFrame *frame = [self.frameBuffer firstObject];
+    if (frame) {
+        pixelBuffer = frame.pixelBuffer;
+        [self.frameBuffer removeObjectAtIndex:0];
     }
-    
-    const GLchar *source = (GLchar *)[sourceString UTF8String];
-    
-    return [self compileShaderString:shader type:type shaderString:source];
-}
-
-- (BOOL)linkProgram:(GLuint)prog
-{
-    GLint status;
-    glLinkProgram(prog);
-    
-#if defined(DEBUG)
-    GLint logLength;
-    glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &logLength);
-    if (logLength > 0) {
-        GLchar *log = (GLchar *)malloc(logLength);
-        glGetProgramInfoLog(prog, logLength, &logLength, log);
-        NSLog(@"Program link log:\n%s", log);
-        free(log);
-    }
-#endif
-    
-    glGetProgramiv(prog, GL_LINK_STATUS, &status);
-    if (status == 0) {
-        return NO;
-    }
-    
-    return YES;
-}
-
-- (BOOL)validateProgram:(GLuint)prog
-{
-    GLint logLength, status;
-    
-    glValidateProgram(prog);
-    glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &logLength);
-    if (logLength > 0) {
-        GLchar *log = (GLchar *)malloc(logLength);
-        glGetProgramInfoLog(prog, logLength, &logLength, log);
-        NSLog(@"Program validate log:\n%s", log);
-        free(log);
-    }
-    
-    glGetProgramiv(prog, GL_VALIDATE_STATUS, &status);
-    if (status == 0) {
-        return NO;
-    }
-    
-    return YES;
-}
-
-- (void)dealloc
-{
-    if (!_context || ![EAGLContext setCurrentContext:_context]) {
-        return;
-    }
-    
-    [self cleanUpTextures];
-    
-    if (self.program) {
-        glDeleteProgram(self.program);
-        self.program = 0;
-    }
-    if(_context) {
-        //[_context release];
-        _context = nil;
-    }
-    //[super dealloc];
+    dispatch_semaphore_signal(_lock);
+    return pixelBuffer;
 }
 
 @end

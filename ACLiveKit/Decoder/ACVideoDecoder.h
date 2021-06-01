@@ -8,6 +8,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CoreVideo.h>
 #import "ACVideoAVCFrame.h"
+#import "ACVideoYuvFrame.h"
 #import "ACLiveProtocol.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -16,7 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 @protocol ACVideoDecoderDelegate <NSObject>
 
 // 解码数据
-- (void)videoDecoderOutputData:(CVPixelBufferRef)pixelBuffer;
+- (void)videoDecoderOutputData:(ACVideoYuvFrame*)yuvFrame;
 
 @end
 

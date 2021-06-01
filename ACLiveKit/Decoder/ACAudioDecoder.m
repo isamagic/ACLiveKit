@@ -70,7 +70,7 @@ typedef struct {
     NSLog(@"ACAudioDecoder:AudioConverterNew: %@", @(status));
 }
 
-// 解码三要素：输入数据、解码法、输出数据
+// 解码三要素：输入数据、解码算法、输出数据
 // 1. 输入：NSData(AAC) -> AudioBuffer
 // 2. 算法：AudioConverterRef (AAC -> PCM)
 // 3. 输出：AudioBuffer -> NSData(PCM) -> CMSampleBufferRef
